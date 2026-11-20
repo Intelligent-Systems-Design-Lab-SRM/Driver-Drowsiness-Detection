@@ -10,6 +10,8 @@ class Settings:
     camera_width: int = 640
     camera_height: int = 480
     frame_scale: float = 1.0
+    landmark_model: str = "models/face_landmarks.onnx"
+    face_cascade: str = ""
     ear_threshold: float = 0.20
     eye_closed_seconds: float = 1.0
     mar_threshold: float = 0.20
@@ -32,12 +34,15 @@ def load_settings() -> Settings:
         "camera_width": int,
         "camera_height": int,
         "frame_scale": float,
+        "landmark_model": str,
+        "face_cascade": str,
         "ear_threshold": float,
         "eye_closed_seconds": float,
         "mar_threshold": float,
         "yawn_seconds": float,
         "face_missing_seconds": float,
         "buzzer_gpio": int,
+        "buzzer_active_high": lambda value: value.lower() in {"1", "true", "yes", "on"},
         "alarm_duration_seconds": float,
         "alarm_pause_seconds": float,
         "debug": lambda value: value.lower() in {"1", "true", "yes", "on"},

@@ -5,7 +5,7 @@ An **ISD Lab** computer-vision project that monitors a driver's face through a w
 - prolonged eye closure using the **Eye Aspect Ratio (EAR)**; and
 - prolonged mouth opening/yawning using the **Mouth Aspect Ratio (MAR)**.
 
-The project uses **Python**, **OpenCV**, **MediaPipe Face Mesh**, and **NumPy**. It works in real time and displays the current measurements and detection status in a webcam window.
+The project uses **Python**, **OpenCV**, **ONNX Runtime**, and **NumPy**. It works in real time and displays the current measurements and detection status in a webcam window.
 
 > **Important:** This is an academic prototype for the ISD Lab. It is not a certified driver-safety system and must not be used as the only method for deciding whether a person is fit to drive.
 
@@ -14,7 +14,7 @@ The project uses **Python**, **OpenCV**, **MediaPipe Face Mesh**, and **NumPy**.
 Driver fatigue can reduce attention and reaction time. This project explores a non-contact monitoring approach using a regular camera:
 
 1. Capture frames from the webcam.
-2. Detect facial landmarks with MediaPipe Face Mesh.
+2. Detect a face with OpenCV and extract 68 facial landmarks with ONNX Runtime.
 3. Measure the relative opening of the eyes and mouth.
 4. Require the condition to persist for a short period before showing a warning. This helps avoid treating a normal blink or brief mouth movement as drowsiness.
 
@@ -45,7 +45,8 @@ The project proposal is included in [`Driver_Drowsiness_Proposal_ISD_Lab_Final.p
 - Internet access while installing the Python packages
 - Permission for Python/your terminal to access the camera
 
-The application does not require a separate model download. MediaPipe's face-mesh resources are installed with the `mediapipe` package.
+The application requires the 68-point ONNX landmark model described in
+[docs/MODEL_SETUP.md](./docs/MODEL_SETUP.md).
 
 ## Download the project
 
@@ -112,7 +113,7 @@ python -m pip install --upgrade pip
 ### 5. Install dependencies
 
 ```powershell
-python -m pip install opencv-python mediapipe numpy
+python -m pip install -r requirements.txt
 ```
 
 The imports used by this project are:
@@ -120,7 +121,7 @@ The imports used by this project are:
 | Package | Purpose |
 |---|---|
 | `opencv-python` | Webcam access, image conversion, drawing, and display |
-| `mediapipe` | Face Mesh facial-landmark detection |
+| `onnxruntime` | CPU facial-landmark inference |
 | `numpy` | Landmark arrays and distance calculations |
 
 ## Run the project
@@ -140,7 +141,7 @@ The window is titled **Driver Drowsiness Detection System**. The screen shows EA
 | Command | Purpose |
 |---|---|
 | `python camera_test.py` | Verify that the webcam can be opened and frames can be read |
-| `python face_detection.py` | Display MediaPipe face landmarks and face-detection status |
+| `python face_detection.py` | Display ONNX landmark and face-detection status |
 | `python eye_detection.py` | Display EAR and detect prolonged eye closure |
 | `python yawn_detection.py` | Display MAR and detect a possible yawn |
 | `python unified_detection.py` | Run eye-closure and mouth-opening detection together |
@@ -149,8 +150,8 @@ Press **Q** while the OpenCV window is focused to stop any script.
 
 ## Raspberry Pi 4 deployment
 
-The Raspberry Pi-ready entry point is `main.py`. It uses the existing
-MediaPipe Face Mesh EAR/MAR detection, a 640x480 camera default, and a
+The Raspberry Pi-ready entry point is `main.py`. It uses OpenCV face detection,
+a 68-point ONNX landmark model, a 640x480 camera default, and a
 GPIO Zero buzzer adapter. On Windows or without GPIO Zero it automatically
 uses a safe mock buzzer.
 
@@ -233,12 +234,12 @@ Then activate the environment again. You can also run the scripts directly:
 .\.venv\Scripts\python.exe unified_detection.py
 ```
 
-### `No module named cv2`, `mediapipe`, or `numpy`
+### `No module named cv2`, `onnxruntime`, or `numpy`
 
 Make sure the virtual environment is active, then run:
 
 ```powershell
-python -m pip install opencv-python mediapipe numpy
+python -m pip install -r requirements.txt
 ```
 
 Check which Python is being used:

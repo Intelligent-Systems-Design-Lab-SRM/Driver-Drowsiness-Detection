@@ -44,13 +44,20 @@ def main() -> int:
         logging.error("Unable to open camera %s", settings.camera_index)
         return 1
 
-    detector = UnifiedDetector(
-        settings.ear_threshold,
-        settings.eye_closed_seconds,
-        settings.mar_threshold,
-        settings.yawn_seconds,
-        settings.frame_scale,
-    )
+    try:
+        detector = UnifiedDetector(
+            settings.landmark_model,
+            settings.ear_threshold,
+            settings.eye_closed_seconds,
+            settings.mar_threshold,
+            settings.yawn_seconds,
+            settings.frame_scale,
+            settings.face_cascade,
+        )
+    except (FileNotFoundError, RuntimeError) as error:
+        camera.release()
+        logging.error("Detector initialization failed: %s", error)
+        return 1
     buzzer = BuzzerController(
         settings.buzzer_gpio,
         settings.buzzer_active_high,

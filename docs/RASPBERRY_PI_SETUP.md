@@ -9,10 +9,10 @@ externally managed Python policy is why the virtual environment is required.
 sudo apt update
 sudo apt install -y python3-venv python3-opencv libatlas-base-dev
 cd Driver-Drowsiness-Detection
-python3 -m venv .venv
+python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-pi.txt
 ```
 
 Connect the USB webcam, then verify it is visible:
@@ -76,6 +76,7 @@ Stop safely with `sudo systemctl stop drowsiness.service`.
   `DROWSINESS_CAMERA_INDEX=1`.
 - If `gpiozero` is unavailable, the application logs that it is using mock
   mode instead of failing silently.
-- MediaPipe model startup warnings are non-fatal. Face landmark processing
-  should still be confirmed with a live camera.
+- If ONNX Runtime cannot be installed for the Pi's Python/architecture,
+  follow the documented compatibility warning in `FINAL_AUDIT_REPORT.md`
+  rather than forcing a source build.
 - Run `python -m unittest discover -s tests` before connecting hardware.

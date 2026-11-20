@@ -1,15 +1,21 @@
-"""Reusable MediaPipe Face Mesh based drowsiness detector."""
+"""OpenCV face detection and ONNX Runtime 68-point landmark detection."""
 
 from dataclasses import dataclass
+import os
 import time
+from importlib import import_module
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
-LEFT_EYE = (362, 385, 387, 263, 373, 380)
-RIGHT_EYE = (33, 160, 158, 133, 153, 144)
-MOUTH = (13, 14, 78, 308)
+try:
+    ort = import_module("onnxruntime")
+except ImportError:  # Keep configuration and unit tests importable without the model runtime.
+    ort = None
+
+LEFT_EYE = (36, 37, 38, 39, 40, 41)
+RIGHT_EYE = (42, 43, 44, 45, 46, 47)
+MOUTH = (62, 66, 48, 54)
 
 
 @dataclass
@@ -27,23 +33,28 @@ class DetectionResult:
 
 
 def calculate_ear(points: np.ndarray) -> float:
+    if points.shape != (6, 2) or not np.isfinite(points).all():
+        return 0.0
     vertical_1 = np.linalg.norm(points[1] - points[5])
     vertical_2 = np.linalg.norm(points[2] - points[4])
     horizontal = np.linalg.norm(points[0] - points[3])
-    return 0.0 if horizontal == 0 else float(
+    return 0.0 if horizontal <= 1e-9 else float(
         (vertical_1 + vertical_2) / (2.0 * horizontal)
     )
 
 
 class UnifiedDetector:
     def __init__(
-        self,
-        ear_threshold: float,
-        eye_closed_seconds: float,
-        mar_threshold: float,
-        yawn_seconds: float,
-        frame_scale: float = 1.0,
+        self, model_path, ear_threshold, eye_closed_seconds, mar_threshold,
+        yawn_seconds, frame_scale=1.0, cascade_path="",
     ):
+        if ort is None:
+            raise RuntimeError("onnxruntime is required; install requirements.txt")
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(
+                f"Landmark model not found: {model_path}. "
+                "Follow docs/MODEL_SETUP.md."
+            )
         self.ear_threshold = ear_threshold
         self.eye_closed_seconds = eye_closed_seconds
         self.mar_threshold = mar_threshold
@@ -51,64 +62,89 @@ class UnifiedDetector:
         self.frame_scale = frame_scale
         self._eye_start = None
         self._mouth_start = None
-        self._mesh = mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+        cascade = cascade_path or cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        self._face_detector = cv2.CascadeClassifier(cascade)
+        if self._face_detector.empty():
+            raise RuntimeError(f"Unable to load face detector: {cascade}")
+        self._session = ort.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"]
         )
+        self._input = self._session.get_inputs()[0]
+        self._input_size = self._input.shape[-1]
+        if not isinstance(self._input_size, int):
+            self._input_size = 128
 
     @staticmethod
-    def _points(face, indices, width, height):
-        return np.array(
-            [[face.landmark[i].x * width, face.landmark[i].y * height] for i in indices],
-            dtype=np.float64,
-        )
+    def _points_from_output(output, box):
+        values = np.asarray(output).reshape(-1)
+        if values.size != 136:
+            raise RuntimeError(f"Expected 68 landmark points, got {values.size // 2}")
+        points = values.reshape(68, 2).astype(np.float32)
+        if points.min() >= 0.0 and points.max() <= 1.0:
+            points[:, 0] *= box[2] - box[0]
+            points[:, 1] *= box[3] - box[1]
+        else:
+            points[:, 0] *= (box[2] - box[0]) / 128.0
+            points[:, 1] *= (box[3] - box[1]) / 128.0
+        points[:, 0] += box[0]
+        points[:, 1] += box[1]
+        return points
 
-    @classmethod
-    def _mar(cls, face, width, height):
-        points = cls._points(face, MOUTH, width, height)
-        mouth_width = np.linalg.norm(points[2] - points[3])
-        return 0.0 if mouth_width == 0 else float(
-            np.linalg.norm(points[0] - points[1]) / mouth_width
-        )
+    def _landmarks(self, frame, box):
+        x1, y1, x2, y2 = box
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        crop = cv2.resize(crop, (self._input_size, self._input_size))
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
+        output = self._session.run(
+            None, {self._input.name: [crop]}
+        )[0]
+        return self._points_from_output(output, box)
 
-    def process(self, frame: np.ndarray) -> DetectionResult:
+    @staticmethod
+    def _ear(landmarks, indices):
+        return calculate_ear(landmarks[list(indices)])
+
+    @staticmethod
+    def _mar(landmarks):
+        upper, lower, left, right = landmarks[list(MOUTH)]
+        width = np.linalg.norm(right - left)
+        return 0.0 if width <= 1e-9 else float(np.linalg.norm(upper - lower) / width)
+
+    def process(self, frame):
         if self.frame_scale <= 0 or self.frame_scale > 1:
             raise ValueError("frame_scale must be greater than 0 and at most 1")
-        original_height, original_width = frame.shape[:2]
+        if frame is None or frame.ndim != 3:
+            raise ValueError("frame must be a color image")
         if self.frame_scale != 1.0:
-            frame = cv2.resize(
-                frame,
-                (int(original_width * self.frame_scale), int(original_height * self.frame_scale)),
-            )
-        height, width = frame.shape[:2]
-        results = self._mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        now = time.monotonic()
-
-        if not results.multi_face_landmarks:
+            frame = cv2.resize(frame, None, fx=self.frame_scale, fy=self.frame_scale)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self._face_detector.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
+        )
+        if len(faces) == 0:
             self.reset()
-            return DetectionResult(face_detected=False)
-
-        face = results.multi_face_landmarks[0]
-        left = self._points(face, LEFT_EYE, width, height)
-        right = self._points(face, RIGHT_EYE, width, height)
-        left_ear = calculate_ear(left)
-        right_ear = calculate_ear(right)
+            return DetectionResult(False)
+        x, y, width, height = max(faces, key=lambda item: item[2] * item[3])
+        box = (int(x), int(y), int(x + width), int(y + height))
+        landmarks = self._landmarks(frame, box)
+        if landmarks is None:
+            self.reset()
+            return DetectionResult(False)
+        now = time.monotonic()
+        left_ear = self._ear(landmarks, LEFT_EYE)
+        right_ear = self._ear(landmarks, RIGHT_EYE)
         ear = (left_ear + right_ear) / 2.0
-        mar = self._mar(face, width, height)
-
+        mar = self._mar(landmarks)
         if ear < self.ear_threshold:
-            if self._eye_start is None:
-                self._eye_start = now
+            self._eye_start = now if self._eye_start is None else self._eye_start
         else:
             self._eye_start = None
         if mar > self.mar_threshold:
-            if self._mouth_start is None:
-                self._mouth_start = now
+            self._mouth_start = now if self._mouth_start is None else self._mouth_start
         else:
             self._mouth_start = None
-
         eye_seconds = 0.0 if self._eye_start is None else now - self._eye_start
         mouth_seconds = 0.0 if self._mouth_start is None else now - self._mouth_start
         critical = eye_seconds >= self.eye_closed_seconds
@@ -128,9 +164,9 @@ class UnifiedDetector:
             status, critical, yawn,
         )
 
-    def reset(self) -> None:
+    def reset(self):
         self._eye_start = None
         self._mouth_start = None
 
-    def close(self) -> None:
-        self._mesh.close()
+    def close(self):
+        self._session = None
