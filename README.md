@@ -147,6 +147,27 @@ The window is titled **Driver Drowsiness Detection System**. The screen shows EA
 
 Press **Q** while the OpenCV window is focused to stop any script.
 
+## Raspberry Pi 4 deployment
+
+The Raspberry Pi-ready entry point is `main.py`. It uses the existing
+MediaPipe Face Mesh EAR/MAR detection, a 640x480 camera default, and a
+GPIO Zero buzzer adapter. On Windows or without GPIO Zero it automatically
+uses a safe mock buzzer.
+
+See [docs/RASPBERRY_PI_SETUP.md](./docs/RASPBERRY_PI_SETUP.md) for virtual
+environment setup, wiring precautions, systemd startup, and troubleshooting.
+The default buzzer output is BCM GPIO 18; use a transistor driver for any
+buzzer that exceeds GPIO current limits.
+
+```powershell
+python -m unittest discover -s tests
+python main.py
+```
+
+Controls are **Q** to quit, **B** to test the buzzer, and **R** to reset the
+alert state. Configuration can be overridden with `DROWSINESS_*` environment
+variables; see [config.py](./config.py).
+
 ## How detection works
 
 ### Eye closure: EAR

@@ -4,13 +4,6 @@ import mediapipe as mp
 import numpy as np
 import time
 
-# Camera setup
-camera = cv2.VideoCapture(0)
-
-if not camera.isOpened():
-    print("Camera not found!")
-    raise SystemExit(1)
-
 # MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
 
@@ -32,9 +25,6 @@ EYE_CLOSED_SECONDS = 1.0
 YAWN_SECONDS = 1.2
 
 eye_closed_start = None
-mouth_open_start = None
-
-
 def calculate_ear(points):
     vertical_1 = np.linalg.norm(points[1] - points[5])
     vertical_2 = np.linalg.norm(points[2] - points[4])
@@ -78,130 +68,135 @@ def calculate_mar(face, width, height):
     return mouth_height / mouth_width
 
 
-with mp_face_mesh.FaceMesh(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-) as face_mesh:
+def main():
+    camera = cv2.VideoCapture(0)
 
-    print("Unified detection started. Press Q to quit.")
+    if not camera.isOpened():
+        print("Camera not found!")
+        camera.release()
+        return 1
 
-    while True:
-        success, frame = camera.read()
+    eye_closed_start = None
+    mouth_open_start = None
 
-        if not success:
-            print("Camera frame unavailable.")
-            break
+    try:
+        with mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        ) as face_mesh:
+            print("Unified detection started. Press Q to quit.")
 
-        frame = cv2.flip(frame, 1)
-        height, width, _ = frame.shape
+            while True:
+                success, frame = camera.read()
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb)
+                if not success:
+                    print("Camera frame unavailable.")
+                    break
 
-        status = "NORMAL MONITORING"
-        color = (0, 255, 0)
+                frame = cv2.flip(frame, 1)
+                height, width, _ = frame.shape
 
-        if results.multi_face_landmarks:
-            face = results.multi_face_landmarks[0]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = face_mesh.process(rgb)
 
-            # Calculate EAR
-            left_points = get_landmark_points(
-                face, LEFT_EYE, width, height
-            )
-            right_points = get_landmark_points(
-                face, RIGHT_EYE, width, height
-            )
+                status = "NORMAL MONITORING"
+                color = (0, 255, 0)
 
-            left_ear = calculate_ear(left_points)
-            right_ear = calculate_ear(right_points)
-            ear = (left_ear + right_ear) / 2.0
+                if results.multi_face_landmarks:
+                    face = results.multi_face_landmarks[0]
 
-            # Calculate MAR
-            mar = calculate_mar(face, width, height)
+                    left_points = get_landmark_points(
+                        face, LEFT_EYE, width, height
+                    )
+                    right_points = get_landmark_points(
+                        face, RIGHT_EYE, width, height
+                    )
 
-            # Draw eye landmarks
-            for point in np.vstack((left_points, right_points)):
-                cv2.circle(
-                    frame, tuple(point.astype(int)),
-                    2, (0, 255, 0), -1
+                    left_ear = calculate_ear(left_points)
+                    right_ear = calculate_ear(right_points)
+                    ear = (left_ear + right_ear) / 2.0
+                    mar = calculate_mar(face, width, height)
+
+                    for point in np.vstack((left_points, right_points)):
+                        cv2.circle(
+                            frame, tuple(point.astype(int)),
+                            2, (0, 255, 0), -1
+                        )
+
+                    if ear < EAR_THRESHOLD:
+                        if eye_closed_start is None:
+                            eye_closed_start = time.monotonic()
+                    else:
+                        eye_closed_start = None
+
+                    if mar > MAR_THRESHOLD:
+                        if mouth_open_start is None:
+                            mouth_open_start = time.monotonic()
+                    else:
+                        mouth_open_start = None
+
+                    now = time.monotonic()
+                    eye_duration = (
+                        now - eye_closed_start
+                        if eye_closed_start is not None else 0
+                    )
+                    mouth_duration = (
+                        now - mouth_open_start
+                        if mouth_open_start is not None else 0
+                    )
+
+                    eye_warning = eye_duration >= EYE_CLOSED_SECONDS
+                    mouth_warning = mouth_duration >= YAWN_SECONDS
+
+                    if eye_warning and mouth_warning:
+                        status = "EYE CLOSURE + MOUTH WARNING"
+                        color = (0, 0, 255)
+                    elif eye_warning:
+                        status = "PROLONGED EYE CLOSURE!"
+                        color = (0, 0, 255)
+                    elif mouth_warning:
+                        status = "POSSIBLE YAWN!"
+                        color = (0, 165, 255)
+                    elif eye_closed_start is not None:
+                        status = "CHECKING EYE CLOSURE..."
+                        color = (0, 165, 255)
+                    elif mouth_open_start is not None:
+                        status = "CHECKING MOUTH OPENING..."
+                        color = (0, 165, 255)
+
+                    cv2.putText(
+                        frame, f"EAR: {ear:.3f}",
+                        (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        frame, f"MAR: {mar:.3f}",
+                        (20, 65), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 0), 2
+                    )
+                else:
+                    eye_closed_start = None
+                    mouth_open_start = None
+                    status = "NO FACE DETECTED"
+                    color = (0, 0, 255)
+
+                cv2.putText(
+                    frame, status,
+                    (20, 110), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65, color, 2
                 )
+                cv2.imshow("Driver Drowsiness Detection System", frame)
 
-            # Eye closure timer
-            if ear < EAR_THRESHOLD:
-                if eye_closed_start is None:
-                    eye_closed_start = time.monotonic()
-            else:
-                eye_closed_start = None
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
 
-            # Mouth opening timer
-            if mar > MAR_THRESHOLD:
-                if mouth_open_start is None:
-                    mouth_open_start = time.monotonic()
-            else:
-                mouth_open_start = None
+    return 0
 
-            eye_duration = (
-                time.monotonic() - eye_closed_start
-                if eye_closed_start is not None else 0
-            )
 
-            mouth_duration = (
-                time.monotonic() - mouth_open_start
-                if mouth_open_start is not None else 0
-            )
-
-            eye_warning = eye_duration >= EYE_CLOSED_SECONDS
-            mouth_warning = mouth_duration >= YAWN_SECONDS
-
-            # Combined decision
-            if eye_warning and mouth_warning:
-                status = "EYE CLOSURE + MOUTH WARNING"
-                color = (0, 0, 255)
-            elif eye_warning:
-                status = "PROLONGED EYE CLOSURE!"
-                color = (0, 0, 255)
-            elif mouth_warning:
-                status = "POSSIBLE YAWN!"
-                color = (0, 165, 255)
-            elif eye_closed_start is not None:
-                status = "CHECKING EYE CLOSURE..."
-                color = (0, 165, 255)
-            elif mouth_open_start is not None:
-                status = "CHECKING MOUTH OPENING..."
-                color = (0, 165, 255)
-
-            # Display measurements
-            cv2.putText(
-                frame, f"EAR: {ear:.3f}",
-                (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (0, 255, 0), 2
-            )
-
-            cv2.putText(
-                frame, f"MAR: {mar:.3f}",
-                (20, 65), cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (0, 255, 0), 2
-            )
-
-        else:
-            eye_closed_start = None
-            mouth_open_start = None
-            status = "NO FACE DETECTED"
-            color = (0, 0, 255)
-
-        # Unified status display
-        cv2.putText(
-            frame, status,
-            (20, 110), cv2.FONT_HERSHEY_SIMPLEX,
-            0.65, color, 2
-        )
-
-        cv2.imshow("Driver Drowsiness Detection System", frame)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-camera.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    raise SystemExit(main())
